@@ -40,7 +40,7 @@ jobs:
           sudo chown -R $USER:$USER ${{ github.workspace }}
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set git config
         uses: autowarefoundation/autoware-github-actions/set-git-config@v1
@@ -107,7 +107,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set git config
         uses: autowarefoundation/autoware-github-actions/set-git-config@v1
@@ -177,7 +177,7 @@ jobs:
           sudo chown -R $USER:$USER ${{ github.workspace }}
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set git config
         uses: autowarefoundation/autoware-github-actions/set-git-config@v1
@@ -234,7 +234,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Combine multi arch images for 'autoware' without CUDA
         uses: ./.github/actions/combine-multi-arch-images
@@ -246,7 +246,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Combine multi arch images for 'autoware' with CUDA
         uses: ./.github/actions/combine-multi-arch-images
@@ -258,7 +258,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Combine multi arch images for 'autoware-tools'
         uses: ./.github/actions/combine-multi-arch-images
@@ -292,7 +292,7 @@ jobs:
           sudo chown -R $USER:$USER ${{ github.workspace }}
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set git config
         uses: autowarefoundation/autoware-github-actions/set-git-config@v1
@@ -366,7 +366,7 @@ jobs:
           sudo chown -R $USER:$USER ${{ github.workspace }}
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set git config
         uses: autowarefoundation/autoware-github-actions/set-git-config@v1
@@ -424,7 +424,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Combine multi arch images for 'autoware' Jazzy
         uses: ./.github/actions/combine-multi-arch-images
@@ -436,7 +436,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Combine multi arch images for 'autoware' Jazzy with CUDA
         uses: ./.github/actions/combine-multi-arch-images

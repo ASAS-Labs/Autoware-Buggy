@@ -34,7 +34,7 @@ jobs:
           sudo chown -R $USER:$USER ${{ github.workspace }}
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Docker image artifact
         uses: actions/download-artifact@v4
