@@ -121,21 +121,77 @@ starts admitting genuinely bad matches rather than just relaxing the gate.
 
 ---
 
-## 4. Sensor / TF Tree Configuration
+## 4. Sensor Kit and Vehicle Description Packages
 
-Sensor kit description (`*_sensor_kit_launch` / URDF) updated for the actual physical
-chain on the gokart, since the stock Autoware sample sensor kit assumes a different
-sensor layout:
+To run a gokart instead of one of Autoware's sample vehicles, two new description
+packages were created (following the standard Autoware naming convention) and passed
+to the launch command as `sensor_model:=gokart_sensor_kit` and
+`vehicle_model:=gokart_vehicle`. Autoware does not ship a gokart profile, so both
+packages were authored from scratch using the sample vehicle/sensor kit packages as a
+template.
+
+### 4.1 `gokart_sensor_kit` — `sensor_kit.xacro`
+
+Defines the physical TF chain from the sensor kit mounting point down to each
+individual sensor frame. For this platform the chain is:
 
 ```
 base_link → sensor_kit_base_link → os_sensor → os_lidar
                                               → os_imu
 ```
 
-Every node in Autoware stamps messages with a `frame_id`; a single broken link in this
-chain causes silent TF lookup failures throughout localization and perception, so this
-was verified end-to-end with `ros2 run tf2_tools view_frames` after every sensor kit
-change.
+The stock sample sensor kit xacro defines a multi-sensor layout (multiple cameras,
+multiple LiDARs) that doesn't match this platform — it was stripped down to a single
+`os_sensor` frame with `os_lidar` and `os_imu` as fixed children, matching the actual
+TF tree the Ouster driver and converter publish. Every node in Autoware stamps
+messages with a `frame_id`; a single broken or misnamed link in this chain causes
+silent TF lookup failures throughout localization and perception rather than an
+obvious error, so this was verified end-to-end with `ros2 run tf2_tools view_frames`
+after every change to the xacro.
+
+### 4.2 `gokart_sensor_kit` — `sensor_kit_calibration.yaml`
+
+Holds the extrinsic calibration (translation + rotation) of `os_sensor` relative to
+`sensor_kit_base_link` — i.e. exactly where the LiDAR is physically mounted on the
+gokart and which way it's facing. This has to be measured/estimated from the physical
+mounting position (height above `base_link`, longitudinal/lateral offset from the
+mounting point) and entered as the translation component, with the rotation component
+encoding any mounting tilt or yaw offset.
+
+One specific correction made here: the OS0's data/power cable exits the housing
+facing one direction, and on this mount the housing was installed with that cable
+facing backward relative to the vehicle's forward direction — meaning the sensor's
+own forward axis was rotated 180° relative to the vehicle's forward axis. This was
+corrected with a 180° yaw rotation in the calibration file's rotation field (the same
+correction was independently needed and applied to FAST-LIO2's `extrinsic_R` in
+`ouster32.yaml` for the same physical reason — see Section 5). Getting this wrong
+doesn't produce an error; it produces a pointcloud and map that are mirrored/rotated
+relative to the vehicle's actual heading, which is much harder to diagnose after the
+fact than it is to get right up front by checking cable orientation against the
+vehicle's forward direction before calibrating.
+
+### 4.3 `gokart_vehicle` — `vehicle_info.param.yaml`
+
+Describes the physical dimensions of the gokart itself — wheelbase, track width,
+front/rear overhang, vehicle width/height — which the planning and control stack use
+for footprint collision checking, the bicycle kinematic model in motion planning, and
+the lateral controller's steering-to-curvature conversion. The key value carried
+through to the vehicle interface stub as well (Section 2) is:
+
+```yaml
+wheel_base: 1.29   # meters, front axle to rear axle
+```
+
+This is the same `WHEELBASE` constant used in `vehicle_interface_stub.py`'s bicycle
+model for estimating steering angle from IMU yaw rate — it has to match what's in
+`vehicle_info.param.yaml`, otherwise the steering angle Autoware's controller computes
+and the steering angle the stub reports back as "current state" are working off
+different physical models of the vehicle, which shows up as the controller
+persistently over- or under-correcting.
+
+`max_steer_angle` here is also what bounds the controller's commanded steering output;
+it should match the gokart's actual mechanical steering limit so Autoware never
+commands an angle the steering mechanism can't physically achieve.
 
 `map_path` is loaded with `projection_type: local` (no MGRS/UTM, no GNSS) — the PCD and
 Lanelet2 map both use the local frame produced by LIO-SAM, so Autoware's localization
