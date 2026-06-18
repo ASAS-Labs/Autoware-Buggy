@@ -123,14 +123,23 @@ starts admitting genuinely bad matches rather than just relaxing the gate.
 
 ## 4. Sensor Kit and Vehicle Description Packages
 
-To run a gokart instead of one of Autoware's sample vehicles, two new description
-packages were created (following the standard Autoware naming convention) and passed
-to the launch command as `sensor_model:=gokart_sensor_kit` and
-`vehicle_model:=gokart_vehicle`. Autoware does not ship a gokart profile, so both
-packages were authored from scratch using the sample vehicle/sensor kit packages as a
-template.
+Autoware Universe ships sample sensor kit and vehicle description packages for its
+reference platforms (camera + multi-LiDAR sensor suites, standard car-shaped vehicle
+profiles). It has **no built-in profile for a single standalone Ouster OS0 LiDAR**, and
+no built-in profile for a gokart-shaped vehicle — both had to be authored from
+scratch as new ROS 2 packages, following Autoware's standard naming convention, and
+referenced in the launch command as `sensor_model:=gokart_sensor_kit` and
+`vehicle_model:=gokart_vehicle`. None of the sample packages could simply be pointed
+at the Ouster and gokart — the sample sensor kits assume sensors and mounting
+geometry this platform doesn't have, so the relevant files were written from a blank
+template rather than edited from an existing config.
 
 ### 4.1 `gokart_sensor_kit` — `sensor_kit.xacro`
+
+**Why it had to be written from scratch:** Autoware's sample sensor kits describe
+multi-sensor rigs (several cameras and LiDARs at fixed offsets matching a specific
+reference vehicle). There is no equivalent stock xacro for "one Ouster OS0 and
+nothing else," so this file was authored new rather than adapted.
 
 Defines the physical TF chain from the sensor kit mounting point down to each
 individual sensor frame. For this platform the chain is:
@@ -140,23 +149,25 @@ base_link → sensor_kit_base_link → os_sensor → os_lidar
                                               → os_imu
 ```
 
-The stock sample sensor kit xacro defines a multi-sensor layout (multiple cameras,
-multiple LiDARs) that doesn't match this platform — it was stripped down to a single
-`os_sensor` frame with `os_lidar` and `os_imu` as fixed children, matching the actual
-TF tree the Ouster driver and converter publish. Every node in Autoware stamps
-messages with a `frame_id`; a single broken or misnamed link in this chain causes
-silent TF lookup failures throughout localization and perception rather than an
-obvious error, so this was verified end-to-end with `ros2 run tf2_tools view_frames`
-after every change to the xacro.
+This was written to match exactly what the Ouster driver and the
+`ouster_to_xyzirc.py` converter actually publish — `os_sensor` as the single physical
+mount point with `os_lidar` and `os_imu` as fixed (zero-offset) children, since on the
+OS0 the LiDAR and IMU share one housing. Every node in Autoware stamps messages with a
+`frame_id`; a single broken or misnamed link in this chain causes silent TF lookup
+failures throughout localization and perception rather than an obvious error, so this
+was verified end-to-end with `ros2 run tf2_tools view_frames` after every change.
 
 ### 4.2 `gokart_sensor_kit` — `sensor_kit_calibration.yaml`
 
-Holds the extrinsic calibration (translation + rotation) of `os_sensor` relative to
-`sensor_kit_base_link` — i.e. exactly where the LiDAR is physically mounted on the
-gokart and which way it's facing. This has to be measured/estimated from the physical
-mounting position (height above `base_link`, longitudinal/lateral offset from the
-mounting point) and entered as the translation component, with the rotation component
-encoding any mounting tilt or yaw offset.
+**Why it had to be written from scratch:** this file holds the *extrinsic*
+calibration — where the sensor physically sits relative to `sensor_kit_base_link` —
+and is unique to each physical mounting. Since there's no stock entry for an OS0
+mounted on a gokart, the translation and rotation had to be measured from the actual
+hardware rather than copied from a sample.
+
+Holds the translation (height above `base_link`, longitudinal/lateral offset from the
+mounting point) and rotation of `os_sensor`, i.e. exactly where the LiDAR is mounted
+on the gokart and which way it's facing.
 
 One specific correction made here: the OS0's data/power cable exits the housing
 facing one direction, and on this mount the housing was installed with that cable
@@ -164,15 +175,24 @@ facing backward relative to the vehicle's forward direction — meaning the sens
 own forward axis was rotated 180° relative to the vehicle's forward axis. This was
 corrected with a 180° yaw rotation in the calibration file's rotation field (the same
 correction was independently needed and applied to FAST-LIO2's `extrinsic_R` in
-`ouster32.yaml` for the same physical reason — see Section 5). Getting this wrong
-doesn't produce an error; it produces a pointcloud and map that are mirrored/rotated
-relative to the vehicle's actual heading, which is much harder to diagnose after the
-fact than it is to get right up front by checking cable orientation against the
-vehicle's forward direction before calibrating.
+`ouster32.yaml` for the same physical reason — see Section 5). This is a problem
+specific to mounting an Ouster sensor that isn't covered by any Autoware default —
+Autoware's sample calibrations assume sensors mounted in known, pre-validated
+orientations from the reference vehicle. Getting this wrong doesn't produce an error;
+it produces a pointcloud and map that are mirrored/rotated relative to the vehicle's
+actual heading, which is much harder to diagnose after the fact than it is to get
+right up front by checking cable orientation against the vehicle's forward direction
+before calibrating.
 
 ### 4.3 `gokart_vehicle` — `vehicle_info.param.yaml`
 
-Describes the physical dimensions of the gokart itself — wheelbase, track width,
+**Why it had to be written from scratch:** Autoware's sample vehicle profiles describe
+the dimensions of its reference car platforms, none of which resemble a gokart's
+wheelbase, width, or overhang. The planning and control stack hard-depend on this file
+existing and being accurate — there's no "generic small vehicle" fallback — so it had
+to be created with the gokart's actual measured dimensions.
+
+Describes the physical dimensions of the gokart — wheelbase, track width,
 front/rear overhang, vehicle width/height — which the planning and control stack use
 for footprint collision checking, the bicycle kinematic model in motion planning, and
 the lateral controller's steering-to-curvature conversion. The key value carried
