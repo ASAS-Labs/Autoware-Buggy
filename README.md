@@ -98,11 +98,6 @@ This went through several iterations before reaching the current approach:
   occupancy_grid_outlier_filter → euclidean_cluster → shape_estimation → validator →
   multi_object_tracker` chain now runs end-to-end on the Ouster pointcloud.
 
-### `autoware_dashboard.py`
-Terminal dashboard subscribing to `/control/command/control_cmd`
-(`autoware_control_msgs/msg/Control`), printing speed (km/h), acceleration, and
-steering angle/direction with an ASCII steering bar, refreshed live.
-
 ---
 
 ## 3. Localization Parameter Changes
