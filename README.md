@@ -8,11 +8,18 @@ camera-based perception, and a custom (non-OEM) vehicle interface.
 Autoware was built from source on JetPack 6.2.2 (471 packages). Everything below is
 additional to that base build.
 
+## Extra Reading for when you feel like you're in need of brain cells
+
+1. [What is Autoware?](docs/autoware_intro.md)
+2. [LiDAR Sensing Pipeline](docs/lidar_sensing_pipeline.md)
+3. [NDT and EKF](docs/ndt_ekf.md)
+4. [Camera Sensing Pipeline](docs/camera_sensing_pipeline.md)
+
 ---
 
 ## 1. Hardware / Sensor Setup
 
-**Sensor:** Ouster OS0-32, connected via Ethernet, static IP `169.254.96.62`.
+**Sensor:** lOuster OS0-32, connected via Ethernet, static IP `169.254.96.62`.
 Jetson `eno1` interface set to `169.254.33.10` via a persistent `nmcli` connection
 profile named `ouster-link` so the link survives reboots without manual reconfiguration.
 
