@@ -1,4 +1,4 @@
-# Autoware Universe — Gokart Platform Modifications
+# Autoware Universe : Gokart Platform Modifications
 
 This document describes everything that was changed, added, or configured on top of a
 stock Autoware Universe source installation to run the stack on the S-AM gokart
