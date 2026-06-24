@@ -1,14 +1,78 @@
-# Autoware Universe : Gokart Platform Modifications
+# Autoware Universe — S-AM Gokart Platform
 
-This document describes everything that was changed, added, or configured on top of a
-stock Autoware Universe source installation to run the stack on the S-AM gokart
-platform: a Jetson AGX Orin paired with a single Ouster OS0-32 LiDAR, no GNSS, no
-camera-based perception, and a custom (non-OEM) vehicle interface.
+This repository contains all configuration, custom nodes, and documentation for
+running [Autoware Universe](https://github.com/autowarefoundation/autoware) on the
+S-AM gokart platform: a Jetson AGX Orin paired with a single Ouster OS0-32 LiDAR,
+no GNSS, no camera-based perception (yet), and a custom vehicle interface.
 
-Autoware was built from source on JetPack 6.2.2 (471 packages). Everything below is
-additional to that base build.
+> **This repo does not ship Autoware itself.** Follow every step below in order —
+> the guide walks through the full Autoware source installation and then applies the
+> gokart-specific changes on top of it in one continuous flow.
 
-## Extra Reading for when you feel like you're in need of brain cells
+---
+
+## ⚠️ Jetson vs Laptop — Architecture Differences
+
+The installation steps in this README are written for the **Jetson AGX Orin
+(ARM64 / aarch64)**. If you are setting up Autoware on an **x86_64 laptop or
+desktop** instead (e.g. for simulation, development, or testing with a bag file),
+several steps differ.
+
+| | Jetson AGX Orin | x86_64 Laptop / Desktop |
+|---|---|---|
+| Architecture | `aarch64` | `x86_64` |
+| OS | Ubuntu 22.04 + JetPack 6.2.2 | Ubuntu 22.04 |
+| CUDA install | Bundled with JetPack — already present | Install from [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) separately |
+| CUDA compute capability flag | `-DCUDA_ARCH_BIN="8.7"` (Ampere, Orin) | Depends on GPU — e.g. `8.6` for RTX 3000 series, `8.9` for RTX 4000 series |
+| PyTorch install | JetPack-specific wheel from NVIDIA redist — `pip install torch --index-url https://developer.download.nvidia.com/compute/redist/jp/v60` | Standard pip — `pip install torch torchvision` |
+| OpenCV | Ships with JetPack — may conflict with ROS 2's OpenCV | Install normally via apt |
+| RViz2 GPU rendering | Broken under X11 on JetPack 6 — falls back to software rendering (`llvmpipe`). Use Foxglove Studio over rosbridge instead | Works normally with any NVIDIA/AMD GPU + standard drivers |
+| colcon build time | 1–2 hours (12-core ARM) | 20–40 min (typical desktop CPU) |
+| `nmcli` Ouster setup | Required — `eno1` is the physical Ethernet port | Required if running with real hardware — interface name may differ (check with `ip link`) |
+| Simulation (no hardware) | AWSIM can run on Jetson but GPU-limited | Recommended platform for AWSIM / CARLA simulation |
+
+### Key build flag differences
+
+**Jetson AGX Orin:**
+```bash
+colcon build --symlink-install \
+  --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-w" \
+    -DCUDA_ARCH_BIN="8.7"
+```
+
+**x86_64 (example for RTX 3080, compute capability 8.6):**
+```bash
+colcon build --symlink-install \
+  --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-w" \
+    -DCUDA_ARCH_BIN="8.6"
+```
+
+> Find your GPU's compute capability at:
+> https://developer.nvidia.com/cuda-gpus
+
+### Running without hardware (laptop, bag file replay)
+
+On a laptop without the physical gokart or Ouster sensor, you can still run
+localization and planning by replaying a pre-recorded bag file instead of launching
+the live sensor:
+
+```bash
+# Skip Terminals 1 and 2 (no hardware needed)
+# Start the vehicle stub and Autoware as normal (Terminals 3 and 4)
+# Then replay a bag file in a fifth terminal:
+ros2 bag play ~/bags/your_recording/ --clock --rate 0.8
+```
+
+The `--clock` flag makes ROS 2 use the bag's timestamps rather than wall clock,
+which is required for NDT and the EKF to behave correctly with recorded data.
+
+---
+
+## Documentation
 
 1. [What is Autoware?](docs/autoware_intro.md)
 2. [LiDAR Sensing Pipeline](docs/lidar_sensing_pipeline.md)
@@ -17,298 +81,187 @@ additional to that base build.
 
 ---
 
-## 1. Hardware / Sensor Setup
+## Hardware
 
-**Sensor:** lOuster OS0-32, connected via Ethernet, static IP `169.254.96.62`.
-Jetson `eno1` interface set to `169.254.33.10` via a persistent `nmcli` connection
-profile named `ouster-link` so the link survives reboots without manual reconfiguration.
+| Component | Details |
+|---|---|
+| Compute | NVIDIA Jetson AGX Orin Developer Kit |
+| OS | Ubuntu 22.04, JetPack 6.2.2 |
+| LiDAR | Ouster OS0-32, connected via Ethernet |
+| LiDAR IP | `169.254.96.62` |
+| Jetson interface | `eno1` → `169.254.33.10` (static, persistent via `nmcli`) |
 
-**Driver launch (standalone, outside Autoware's sensing launch):**
+---
+
+## Step 1 — Set up the Jetson network interface for the LiDAR
+
+The Ouster OS0 communicates over a link-local Ethernet connection. Configure a
+persistent static IP on the Jetson so the sensor is reachable after every reboot:
+
 ```bash
-ros2 launch ouster_ros sensor.launch.xml \
-  sensor_hostname:=169.254.96.62 \
-  lidar_mode:=1024x20 \
-  point_type:=xyzir \
-  "proc_mask:=IMU|PCL" \
-  timestamp_mode:=TIME_FROM_ROS_TIME \
-  pub_static_tf:=false \
-  viz:=false
-```
-`pub_static_tf:=false` is intentional — Autoware's own `sensor_kit_launch` publishes
-the TF chain, so the Ouster driver's internal static TF publisher is disabled to avoid
-duplicate/conflicting transforms.
+sudo nmcli con add type ethernet \
+  con-name ouster-link \
+  ifname eno1 \
+  ipv4.method manual \
+  ipv4.addresses 169.254.33.10/16 \
+  connection.autoconnect yes
 
-**Convenience launcher** — `~/autoware/launch_gokart.sh` starts the OS0 driver, the
-IMU relay, and the point cloud converter (below) as background processes from a single
-command, with a trap on Ctrl+C to cleanly kill all three.
-
----
-
-## 2. Custom ROS 2 Nodes
-
-### `ouster_to_xyzirc.py`
-Autoware's preprocessing pipeline (crop box filter, NDT, etc.) expects pointclouds in
-`PointXYZIRC` layout: `x,y,z` as `float32`, `intensity` as `uint8`, `return_type` as
-`uint8`, `channel` as `uint16` (16-byte point step). The Ouster ROS 2 driver does not
-publish this layout natively. This node subscribes to the raw Ouster pointcloud and
-republishes a byte-for-byte repacked `PointCloud2` matching Autoware's expected field
-layout and offsets.
-
-**QoS bridging:** the Ouster driver publishes `BEST_EFFORT`, but Autoware's
-`crop_box_filter` and downstream nodes subscribe `RELIABLE`. The converter's output
-publisher uses `RELIABLE` QoS to match, otherwise messages are silently dropped at the
-subscription boundary.
-
-### `imu_relay.py`
-Relays `/ouster/imu` to the IMU topic Autoware expects (`/sensing/imu/imu_data`),
-since Autoware's IMU corrector and gyro odometer are wired to a specific topic name
-that doesn't match the Ouster driver's default.
-
-### `vehicle_interface_stub.py`
-No CAN bus / real vehicle interface exists yet, so this node satisfies Autoware's
-vehicle interface contract entirely in software. It publishes, at 50 Hz:
-`/vehicle/status/velocity_status`, `/vehicle/status/steering_status`,
-`/vehicle/status/gear_status`, `/vehicle/status/control_mode`.
-
-This went through several iterations before reaching the current approach:
-
-| Attempt | Velocity source | Problem |
-|---|---|---|
-| 1 | EKF position delta | NDT noise on the EKF pose caused false non-zero velocity when stationary → vehicle appeared to drift in RViz after stopping |
-| 2 | EKF twist directly | `gyro_odometer` (which feeds EKF twist) itself depends on reported vehicle velocity → circular dependency, twist stayed ~0 |
-| 3 (current) | **NDT pose (`PoseStamped`) position delta** | Works — no circular dependency, since NDT pose is independent of vehicle status feedback |
-
-**Current implementation details:**
-- Subscribes to `/localization/pose_estimator/pose` (confirmed via `ros2 topic info -v`
-  to be `geometry_msgs/msg/PoseStamped`, **not** `PoseWithCovarianceStamped` — the
-  topic has two possible types and subscribing to the wrong one silently receives
-  nothing).
-- `v = sqrt(dx² + dy²) / dt` between consecutive NDT poses.
-- Steering estimated from IMU yaw rate via the bicycle kinematic model:
-  `δ = atan2(yaw_rate × WHEELBASE, v)`.
-- Low-pass filtering (`VEL_ALPHA = 0.4`, `STEER_ALPHA = 0.3`) to smooth NDT jitter.
-- `MIN_VEL_THRESH = 0.8 m/s` — below this, velocity/steering/yaw-rate are snapped to
-  zero after `STOPPED_FRAMES = 5` consecutive low readings, and the position history is
-  reset (`prev_x/y/t = None`) so the next motion starts from a clean delta instead of
-  an accumulated stale one. The threshold was raised in stages (0.15 → 0.45 → 0.8) to
-  satisfy `operation_mode_transition_manager`'s velocity-matching check for autonomous
-  engagement.
-- `MAX_DT = 0.3s` and `MAX_VEL = 10.0 m/s` sanity bounds reject stale timestamps and
-  NDT jump artifacts respectively.
-- **No dummy perception topics are published.** Earlier versions published empty
-  `PredictedObjects` and an empty `/perception/obstacle_segmentation/pointcloud` to
-  satisfy the planner — this turned out to *override* the real LiDAR perception
-  pipeline (clusters were detected correctly downstream but never reached
-  `/perception/object_recognition/objects` because the stub's empty data was racing
-  the real ground-filter output on the same topic). The dummy perception publishers
-  were removed entirely; the real `crop_box_filter → ground_filter →
-  occupancy_grid_outlier_filter → euclidean_cluster → shape_estimation → validator →
-  multi_object_tracker` chain now runs end-to-end on the Ouster pointcloud.
-
----
-
-## 3. Localization Parameter Changes
-
-File: `ndt_scan_matcher.param.yaml` (located via
-`find ~/autoware/src -name "ndt_scan_matcher.param.yaml"`).
-
-| Parameter | Stock | Changed to | Reason |
-|---|---|---|---|
-| `converged_param_nearest_voxel_transformation_likelihood` | 2.3 | 1.5 | Default threshold caused NDT to stop publishing poses in lower-feature outdoor areas; EKF covariance weighting handles low-confidence poses, so a lower threshold trades strict gating for continuous pose availability |
-| `num_threads` | 4 | 8 | Use all available Jetson AGX Orin cores for scan matching |
-| `skipping_publish_num` | 5 | 1 | Stock value could skip up to 5 consecutive rejected scans before publishing, producing multi-hundred-ms gaps in pose output that the EKF interpreted as motion |
-
-**Recommended bounds:** don't drop the convergence threshold below ~1.0 — that
-starts admitting genuinely bad matches rather than just relaxing the gate.
-
----
-
-## 4. Sensor Kit and Vehicle Description Packages
-
-Autoware Universe ships sample sensor kit and vehicle description packages for its
-reference platforms (camera + multi-LiDAR sensor suites, standard car-shaped vehicle
-profiles). It has **no built-in profile for a single standalone Ouster OS0 LiDAR**, and
-no built-in profile for a gokart-shaped vehicle — both had to be authored from
-scratch as new ROS 2 packages, following Autoware's standard naming convention, and
-referenced in the launch command as `sensor_model:=gokart_sensor_kit` and
-`vehicle_model:=gokart_vehicle`. None of the sample packages could simply be pointed
-at the Ouster and gokart — the sample sensor kits assume sensors and mounting
-geometry this platform doesn't have, so the relevant files were written from a blank
-template rather than edited from an existing config.
-
-### 4.1 `gokart_sensor_kit` — `sensor_kit.xacro`
-
-**Why it had to be written from scratch:** Autoware's sample sensor kits describe
-multi-sensor rigs (several cameras and LiDARs at fixed offsets matching a specific
-reference vehicle). There is no equivalent stock xacro for "one Ouster OS0 and
-nothing else," so this file was authored new rather than adapted.
-
-Defines the physical TF chain from the sensor kit mounting point down to each
-individual sensor frame. For this platform the chain is:
-
-```
-base_link → sensor_kit_base_link → os_sensor → os_lidar
-                                              → os_imu
+sudo nmcli con up ouster-link
 ```
 
-This was written to match exactly what the Ouster driver and the
-`ouster_to_xyzirc.py` converter actually publish — `os_sensor` as the single physical
-mount point with `os_lidar` and `os_imu` as fixed (zero-offset) children, since on the
-OS0 the LiDAR and IMU share one housing. Every node in Autoware stamps messages with a
-`frame_id`; a single broken or misnamed link in this chain causes silent TF lookup
-failures throughout localization and perception rather than an obvious error, so this
-was verified end-to-end with `ros2 run tf2_tools view_frames` after every change.
+Verify the sensor is reachable:
 
-### 4.2 `gokart_sensor_kit` — `sensor_kit_calibration.yaml`
-
-**Why it had to be written from scratch:** this file holds the *extrinsic*
-calibration — where the sensor physically sits relative to `sensor_kit_base_link` —
-and is unique to each physical mounting. Since there's no stock entry for an OS0
-mounted on a gokart, the translation and rotation had to be measured from the actual
-hardware rather than copied from a sample.
-
-Holds the translation (height above `base_link`, longitudinal/lateral offset from the
-mounting point) and rotation of `os_sensor`, i.e. exactly where the LiDAR is mounted
-on the gokart and which way it's facing.
-
-One specific correction made here: the OS0's data/power cable exits the housing
-facing one direction, and on this mount the housing was installed with that cable
-facing backward relative to the vehicle's forward direction — meaning the sensor's
-own forward axis was rotated 180° relative to the vehicle's forward axis. This was
-corrected with a 180° yaw rotation in the calibration file's rotation field (the same
-correction was independently needed and applied to FAST-LIO2's `extrinsic_R` in
-`ouster32.yaml` for the same physical reason — see Section 5). This is a problem
-specific to mounting an Ouster sensor that isn't covered by any Autoware default —
-Autoware's sample calibrations assume sensors mounted in known, pre-validated
-orientations from the reference vehicle. Getting this wrong doesn't produce an error;
-it produces a pointcloud and map that are mirrored/rotated relative to the vehicle's
-actual heading, which is much harder to diagnose after the fact than it is to get
-right up front by checking cable orientation against the vehicle's forward direction
-before calibrating.
-
-### 4.3 `gokart_vehicle` — `vehicle_info.param.yaml`
-
-**Why it had to be written from scratch:** Autoware's sample vehicle profiles describe
-the dimensions of its reference car platforms, none of which resemble a gokart's
-wheelbase, width, or overhang. The planning and control stack hard-depend on this file
-existing and being accurate — there's no "generic small vehicle" fallback — so it had
-to be created with the gokart's actual measured dimensions.
-
-Describes the physical dimensions of the gokart — wheelbase, track width,
-front/rear overhang, vehicle width/height — which the planning and control stack use
-for footprint collision checking, the bicycle kinematic model in motion planning, and
-the lateral controller's steering-to-curvature conversion. The key value carried
-through to the vehicle interface stub as well (Section 2) is:
-
-```yaml
-wheel_base: 1.29   # meters, front axle to rear axle
+```bash
+ping 169.254.96.62
 ```
 
-This is the same `WHEELBASE` constant used in `vehicle_interface_stub.py`'s bicycle
-model for estimating steering angle from IMU yaw rate — it has to match what's in
-`vehicle_info.param.yaml`, otherwise the steering angle Autoware's controller computes
-and the steering angle the stub reports back as "current state" are working off
-different physical models of the vehicle, which shows up as the controller
-persistently over- or under-correcting.
-
-`max_steer_angle` here is also what bounds the controller's commanded steering output;
-it should match the gokart's actual mechanical steering limit so Autoware never
-commands an angle the steering mechanism can't physically achieve.
-
-`map_path` is loaded with `projection_type: local` (no MGRS/UTM, no GNSS) — the PCD and
-Lanelet2 map both use the local frame produced by LIO-SAM, so Autoware's localization
-initialization and the Lanelet2 map projector are both set to `Local` rather than the
-default geodetic projection.
-
 ---
 
-## 5. Mapping Pipeline (Offline, Map-Building Side)
+## Step 2 — Clone Autoware and install dependencies
 
-Not part of the live Autoware launch, but the map artifacts it depends on are produced
-by this pipeline — documented here since it's a required prerequisite, not a stock
-Autoware capability.
+### 2.1 Clone the Autoware repository
 
-**LIO-SAM** (ROS 2 branch, `TixiaoShan/LIO-SAM -b ros2`) is the primary mapper, chosen
-for loop closure support on the circuit-style campus route. Required build/config
-changes vs. stock LIO-SAM:
-- GTSAM rebuilt from source with `-DGTSAM_USE_SYSTEM_EIGEN=ON` — the prebuilt GTSAM
-  was compiled against a different Eigen version than ROS 2 Humble ships, causing a
-  static assertion failure at compile time.
-- `params.yaml`: `baselinkFrame: "os_sensor"` (the recorded bags only contain
-  `os_sensor → os_lidar/os_imu`, no `base_link`, so LIO-SAM is told `os_sensor` is the
-  root) and `robot.urdf.xacro` rewritten so `os_sensor` is the URDF root with
-  `os_lidar`/`os_imu` as fixed children — the stock xacro defines unrelated frame
-  names (`lidar_link`, `imu_link`, etc.) that don't exist in the recorded TF tree.
-- `imuPreintegration.cpp` failure-detection thresholds raised
-  (`vel.norm() > 30 → 100`, `ba.norm()/bg.norm() > 1.0 → 10.0`) after repeated
-  "Large velocity, reset IMU-preintegration!" resets on longer (5-mile) recordings;
-  requires a rebuild of the `lio_sam` package after editing.
-- `point_type:=original` (or `xyzirdt`) used when recording bags intended for
-  mapping — `xyzir` lacks per-point timestamps, which disables LIO-SAM's deskew step
-  and visibly doubles thin features (tree branches, poles) in the resulting map.
-- Final map saved via the `/lio_sam/save_map` service
-  (`ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap ...`, using
-  `savePCDFileBinary` internally) rather than relying on the Ctrl+C shutdown hook —
-  interrupting LIO-SAM mid-write with `savePCDFileASCII` produced a corrupted PCD
-  header (`WIDTH`/`POINTS` not matching actual line count).
-
-**FAST-LIO2** (`OmerMersin/FAST_LIO_GPU` fork, chosen over the official
-`hku-mars/FAST_LIO` ROS 2 branch because the official branch has a hard Livox
-dependency) was evaluated as a faster, GPU-accelerated alternative — useful for quick
-iteration but lacks loop closure, so it accumulates drift on longer routes and was not
-used for the final campus map.
-
-**Lanelet2 vector map** built using Tier IV's web-based Vector Map Builder
-(`tools.tier4.jp/vector_map_builder_ll2`) on top of the exported LIO-SAM PCD, with
-`ProjectorType: Local` to match Autoware's `projection_type: local` localization
-config.
-
----
-
-## 6. Perception
-
-No camera is present on this platform, so perception is LiDAR-only, using Autoware's
-existing euclidean clustering pipeline (no custom detection nodes were written):
-
-```
-/sensing/lidar/concatenated/pointcloud
-  → crop_box_filter
-  → scan_ground_filter → /perception/obstacle_segmentation/single_frame/pointcloud
-  → occupancy_grid_based_outlier_filter → /perception/obstacle_segmentation/pointcloud
-  → voxel_grid_downsample_filter / compare_map_filter
-  → euclidean_cluster
-  → shape_estimation
-  → obstacle_pointcloud_based_validator
-  → multi_object_tracker
-  → /perception/object_recognition/objects
+```bash
+git clone https://github.com/autowarefoundation/autoware.git
+cd autoware
 ```
 
-The only change required to make this stock pipeline work was removing the vehicle
-interface stub's dummy perception publishers (see §2) — the pipeline itself is
-unmodified Autoware. `voxel_based_compare_map_filter`'s `distance_threshold` (default
-0.5 m) is the main tuning knob if dynamic objects close to mapped static geometry are
-being filtered out along with the map points.
+By default this checks out the `main` branch. This platform was built and tested
+against the **1.8.0** release (compatible with ROS 2 Humble). Check out that tag for
+a stable, reproducible build:
+
+```bash
+git checkout 1.8.0
+```
+
+> The full list of available release tags is on the
+> [Autoware releases page](https://github.com/autowarefoundation/autoware/releases).
+
+### 2.2 Install all dependencies via the Ansible playbook
+
+Autoware provides an Ansible playbook that automatically installs everything needed
+(ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step. This is
+the official recommended approach and is much less error-prone than installing each
+dependency manually.
+
+```bash
+bash ansible/scripts/install-ansible.sh
+ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
+ansible-playbook autoware.dev_env.install_dev_env
+```
+
+> **Jetson / no discrete GPU:** if you are on a Jetson (where CUDA comes bundled
+> with JetPack rather than being installed by the playbook) or on a machine without
+> an NVIDIA GPU, skip the NVIDIA-specific steps:
+> ```bash
+> ansible-playbook autoware.dev_env.install_dev_env --skip-tags nvidia
+> ```
+
+If the playbook fails on any step, consult the official
+[Troubleshooting guide](https://autowarefoundation.github.io/autoware-documentation/main/installation/autoware/source-installation/#troubleshooting).
+
+### 2.3 Import all package sources
+
+```bash
+mkdir src
+vcs import src < autoware.repos
+```
+
+This fetches all ~471 Autoware Universe packages into `src/`.
+
+### 2.4 Install ROS package dependencies
+
+```bash
+source /opt/ros/humble/setup.bash
+rosdep install -y \
+  --from-paths src \
+  --ignore-src \
+  --rosdistro humble
+```
 
 ---
 
-## 7. Planning / Control
+## Step 3 — Build Autoware
 
-No source changes — stock Autoware mission planning (Lanelet2 graph search), motion
-planning (velocity smoother, obstacle stop planner), and control (pure
-pursuit/MPC lateral, PID longitudinal) are used as-is. The only adaptation is on the
-input side: the vehicle interface stub (§2) supplies the velocity/steering feedback
-these modules require, since there is no physical vehicle interface yet.
+This step takes 1–2 hours on the Jetson AGX Orin.
+
+```bash
+cd ~/autoware
+colcon build --symlink-install \
+  --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-w" \
+    -DCUDA_ARCH_BIN="8.7"
+```
+
+> `-DCMAKE_CXX_FLAGS="-w"` suppresses warning spam so real errors are visible.
+> `-DCUDA_ARCH_BIN="8.7"` targets the Jetson AGX Orin's Ampere GPU specifically.
+
+If the build fails on **OpenCV ximgproc headers**:
+```bash
+sudo apt install -y libopencv-contrib-dev
+```
+Then re-run the `colcon build` command above.
+
+Once the build finishes, source the workspace:
+
+```bash
+source ~/autoware/install/setup.bash
+echo "source ~/autoware/install/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
 
 ---
 
-## 8. How to Run the Stack
+## Step 4 — Clone this repository and apply gokart changes
 
-The stack must be brought up in a specific order because each layer depends on topics
-published by the one before it. Running them out of order (e.g. launching Autoware
-before the sensor is publishing) causes nodes to wait indefinitely or fail silently on
-missing TF/topics.
+```bash
+cd ~
+git clone https://github.com/ASAS-Labs/Autoware-Buggy.git
+cd Autoware-Buggy
+chmod +x install.sh
+./install.sh
+```
 
-### Step 1 — LiDAR driver
+### What `install.sh` does
+
+| Action | Detail |
+|---|---|
+| Copies `gokart_sensor_kit` | Custom Ouster OS0 sensor kit — `sensor_kit.xacro` + `sensor_kit_calibration.yaml` |
+| Copies `gokart_vehicle` | Gokart vehicle description — `vehicle_info.param.yaml` (wheelbase, dimensions) |
+| Patches NDT params | Lowers `converged_param_nearest_voxel_transformation_likelihood` from `2.3` → `1.5`, raises `num_threads` to `8` |
+| Copies Python nodes | `ouster_to_xyzirc.py`, `imu_relay.py`, `vehicle_interface_stub.py`, `launch_gokart.sh` |
+| Rebuilds modified packages | `colcon build --packages-select gokart_vehicle gokart_sensor_kit` |
+
+After `install.sh` completes, the gokart packages are visible inside the Autoware
+workspace and the custom nodes are in `~/` and `~/autoware/`.
+
+---
+
+## Step 5 — Prepare the map
+
+The `map/nyu-map/` folder in this repo contains the prebuilt NYU campus map:
+- `pointcloud_map.pcd` — LIO-SAM pointcloud map
+- `lanelet2_map.osm` — Lanelet2 vector map
+
+Copy it to the expected location:
+
+```bash
+cp -r ~/Autoware-Buggy/map/nyu-map ~/autoware/nyu-map
+```
+
+> To build your own map for a different environment, see
+> [docs/lidar_sensing_pipeline.md](docs/lidar_sensing_pipeline.md) and the mapping
+> section in [CHANGES.md](CHANGES.md).
+
+---
+
+## Step 6 — Run the stack
+
+Open four terminals. Start them in order — each step depends on the previous one
+being live before continuing.
+
+### Terminal 1 — LiDAR driver
 
 ```bash
 source ~/autoware/install/setup.bash
@@ -322,63 +275,35 @@ ros2 launch ouster_ros sensor.launch.xml \
   viz:=false
 ```
 
-**Why first:** every other node in the stack — the converter, the IMU relay, NDT, the
-whole perception pipeline — ultimately consumes data that originates from the sensor.
-Nothing downstream can do anything useful until `/ouster/points` and `/ouster/imu` are
-actually publishing. `pub_static_tf:=false` is set here because Autoware's own sensor
-kit launch (step 4) owns the TF tree — if both the driver and Autoware publish the same
-static transforms, you get duplicate/conflicting frames.
+Wait until the terminal shows the sensor connected and pointcloud publishing before
+moving on.
 
-### Step 2 — `launch_gokart.sh` (converter + IMU relay)
+### Terminal 2 — Converter + IMU relay
 
 ```bash
 ~/autoware/launch_gokart.sh
 ```
 
-This single script starts `imu_relay.py` and `ouster_to_xyzirc.py` as background
-processes (with a trap so Ctrl+C kills both cleanly). Equivalent to running, in two
-separate terminals:
+Starts `ouster_to_xyzirc.py` (PointXYZIRC converter + QoS bridge) and `imu_relay.py`
+(`/ouster/imu` → `/sensing/imu/imu_data`) as background processes. Ctrl+C kills both.
+Wait ~3 seconds for both nodes to initialize.
+
+### Terminal 3 — Vehicle interface stub
 
 ```bash
-python3 ~/imu_relay.py
-python3 ~/ouster_to_xyzirc.py
-```
-
-**Why this step exists:** Autoware does not understand the Ouster driver's native
-output directly.
-
-- `ouster_to_xyzirc.py` re-packs the raw Ouster pointcloud into the exact
-  `PointXYZIRC` byte layout Autoware's `crop_box_filter`/NDT pipeline requires, and
-  republishes it with `RELIABLE` QoS to match what those nodes subscribe with (the
-  Ouster driver itself publishes `BEST_EFFORT`, which Autoware's `RELIABLE`
-  subscribers silently ignore).
-- `imu_relay.py` republishes `/ouster/imu` onto the topic name
-  (`/sensing/imu/imu_data`) that Autoware's IMU corrector and gyro odometer are
-  hardwired to subscribe to.
-
-Without this step, Autoware's sensing/localization nodes come up but never receive
-any data — there's no error, they just sit idle waiting on topics nothing is
-publishing.
-
-### Step 3 — Vehicle interface stub
-
-```bash
+source ~/autoware/install/setup.bash
 python3 ~/autoware/vehicle_interface_stub.py
 ```
 
-**Why this step exists:** Autoware's planning and control stack will not transition
-into autonomous mode — and several nodes (`operation_mode_transition_manager`, the
-behavior planner, AEB) will not function correctly — unless something is publishing
-the vehicle status topics a real vehicle interface would normally provide:
-`/vehicle/status/velocity_status`, `/vehicle/status/steering_status`,
-`/vehicle/status/gear_status`, `/vehicle/status/control_mode`. There is no CAN bus
-connection on this platform yet, so this node synthesizes those topics from NDT pose
-and IMU data instead (see Section 2 for why it computes velocity the way it does).
-This must be running before Autoware is launched, or the operation mode transition
-manager will report `is_autonomous_mode_available: false` indefinitely with no clear
-error pointing at the actual cause.
+You should see:
+```
+[vehicle_interface_stub]: Vehicle stub started -- velocity from NDT PoseStamped delta, steering from IMU
+```
 
-### Step 4 — Autoware
+This must be running before Autoware starts, otherwise the operation mode transition
+manager will block autonomous mode indefinitely.
+
+### Terminal 4 — Autoware
 
 ```bash
 source ~/autoware/install/setup.bash
@@ -397,40 +322,91 @@ ros2 launch autoware_launch autoware.launch.xml \
   "initial_pose:=[0.0, 0.0, 0.0, 0.0, 0.0, 0.707, 0.707]"
 ```
 
-**Why launched last:** Autoware's localization, perception, planning, and control
-nodes all depend on topics from steps 1 through 3 being live and correctly formatted.
-Bringing Autoware up first just means its nodes spin up cleanly but sit waiting.
-`launch_sensing_driver:=false` tells Autoware explicitly not to try to start its own
-copy of the Ouster driver, since step 1 already owns that. `gnss_enabled:=false` and
-the explicit `initial_pose` are required because this platform has no GNSS — Autoware
-needs to be told where it's starting from rather than initializing from a GPS fix.
+---
 
-### Summary
+## Step 7 — Verify everything is working
 
-| Step | What | Why it has to come first |
-|---|---|---|
-| 1 | OS0 driver | Source of all raw sensor data |
-| 2 | `launch_gokart.sh` | Converts/relays raw sensor data into the exact topics and formats Autoware expects |
-| 3 | `vehicle_interface_stub.py` | Supplies the vehicle status feedback Autoware's mode manager and control stack require to operate |
-| 4 | Autoware | Consumes everything above — localization, perception, planning, control |
+```bash
+# NDT localization rate (~10-12 Hz) and confidence score (aim for > 2.3)
+ros2 topic hz /localization/pose_estimator/pose
+ros2 topic echo /localization/pose_estimator/nearest_voxel_transformation_likelihood --field data
+
+# EKF fused pose — should be 50 Hz
+ros2 topic hz /localization/kinematic_state
+
+# Vehicle status from stub — should be 50 Hz
+ros2 topic hz /vehicle/status/velocity_status
+
+# Operation mode — mode: 2 = autonomous, is_autonomous_mode_available: true = ready
+ros2 topic echo --once /api/operation_mode/state
+
+# Live control commands in human-readable format
+ros2 topic echo /control/command/control_cmd | awk \
+  '/velocity/{printf "Speed: %.1f mph  ", $2*2.23694} \
+   /steering_tire_angle/{printf "Steer: %.1f deg\n", $2*57.2958}'
+```
+
+Set a destination by clicking **2D Goal Pose** in RViz2. A trajectory will appear and
+control commands will update as Autoware plans and follows the route.
 
 ---
 
-## 9. Known Limitations / Open Items
+## Repository structure
 
-- **RViz2 GPU acceleration is unresolved on this JetPack 6.2.2 + X11 configuration.**
-  `glxinfo` reports `llvmpipe` (software rendering) regardless of `LD_LIBRARY_PATH`,
-  `__GLX_VENDOR_LIBRARY_NAME`, or custom `glx_vendor.d` ICD overrides pointing at the
-  Tegra `libGLX_nvidia.so.0` — these load but the X server raises `BadValue`/`BadAccess`
-  on `glXMakeCurrent`. Root cause appears to be the Tegra X11 driver's GLX path being
-  fundamentally limited under JetPack 6 (it primarily targets EGL/Wayland). Workaround
-  used for demos: run `rosbridge_server` on the Jetson and visualize via Foxglove
-  Studio on a separate laptop, freeing the Jetson's CPU/GPU entirely for Autoware.
-- **No real vehicle actuation.** The vehicle interface stub provides velocity/steering
-  feedback only — it does not send commands to any motor controller. Planning and
-  control compute valid steering/speed commands (`/control/command/control_cmd`), but
-  nothing currently consumes them to drive the physical gokart. This is the next
-  integration milestone (CAN bus to the motor/steering controllers).
-- **PyTorch on the Jetson is CPU-only** (the apt-installed build). A JetPack
-  6-specific CUDA wheel is needed before any GPU-accelerated perception model
-  (e.g. YOLO, CenterPoint) can run with hardware acceleration.
+```
+Autoware-Buggy/
+├── docs/
+│   ├── autoware_intro.md
+│   ├── lidar_sensing_pipeline.md
+│   ├── ndt_ekf.md
+│   └── camera_sensing_pipeline.md
+├── src/
+│   ├── gokart_sensor_kit/       # Ouster OS0 sensor kit — xacro + calibration yaml
+│   └── gokart_vehicle/          # Gokart vehicle description — vehicle_info.param.yaml
+├── config/
+│   └── ndt_scan_matcher.param.yaml
+├── scripts/
+│   ├── ouster_to_xyzirc.py
+│   ├── imu_relay.py
+│   ├── vehicle_interface_stub.py
+│   └── launch_gokart.sh
+├── map/
+│   └── nyu-map/
+│       ├── pointcloud_map.pcd
+│       └── lanelet2_map.osm
+├── CHANGES.md                   # Full change log — every modification explained
+├── install.sh
+└── README.md
+```
+
+---
+
+## Troubleshooting
+
+**Ouster driver can't connect to sensor**
+```bash
+sudo nmcli con up ouster-link
+ip addr show eno1     # should show 169.254.33.10
+ping 169.254.96.62
+```
+
+**NDT score stays below 1.0 after setting initial pose**
+
+Use the **2D Pose Estimate** button in RViz2 to manually click the vehicle's position
+on the map and set its approximate heading. The launch command's `initial_pose` is an
+identity quaternion which may not match where the vehicle actually is.
+
+**`is_autonomous_mode_available: false` with all topics publishing**
+
+The vehicle interface stub (Terminal 3) must be started before Autoware (Terminal 4).
+Stop Terminal 4, confirm Terminal 3 is running, then relaunch Terminal 4.
+
+**`colcon build` fails on OpenCV ximgproc**
+```bash
+sudo apt install -y libopencv-contrib-dev
+```
+
+**`colcon build` fails on CUDA architecture**
+
+Make sure `-DCUDA_ARCH_BIN="8.7"` is included in the build command — `8.7` is the
+Jetson AGX Orin's compute capability. Other Jetson models use different values.
