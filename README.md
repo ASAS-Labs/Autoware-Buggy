@@ -122,22 +122,20 @@ ping 169.254.96.62
 ### 2.1 Clone the Autoware repository
 
 ```bash
-git clone https://github.com/autowarefoundation/autoware.git
+git clone https://github.com/ASAS-Labs/Autoware-Buggy.git
 cd autoware
 ```
-
-By default this checks out the `main` branch. This platform was built and tested
-against the **1.8.0** release (compatible with ROS 2 Humble). Check out that tag for
-a stable, reproducible build:
+### 2.2 Install all dependencies via the the setup script 
+Autoware-Buggy provides a setup script that automatically installs everything needed (ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step.
 
 ```bash
-git checkout 1.8.0
+./setup-dev-env.sh
 ```
 
 > The full list of available release tags is on the
 > [Autoware releases page](https://github.com/autowarefoundation/autoware/releases).
 
-### 2.2 Install all dependencies via the Ansible playbook
+### 2.3 Import all package sources
 
 Autoware provides an Ansible playbook that automatically installs everything needed
 (ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step. This is
@@ -145,9 +143,7 @@ the official recommended approach and is much less error-prone than installing e
 dependency manually.
 
 ```bash
-bash ansible/scripts/install-ansible.sh
-ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml
-ansible-playbook autoware.dev_env.install_dev_env
+vcs import src < repositories/autoware.repos
 ```
 
 > **Jetson / no discrete GPU:** if you are on a Jetson (where CUDA comes bundled
@@ -160,23 +156,14 @@ ansible-playbook autoware.dev_env.install_dev_env
 If the playbook fails on any step, consult the official
 [Troubleshooting guide](https://autowarefoundation.github.io/autoware-documentation/main/installation/autoware/source-installation/#troubleshooting).
 
-### 2.3 Import all package sources
-
-```bash
-mkdir src
-vcs import src < autoware.repos
-```
-
-This fetches all ~471 Autoware Universe packages into `src/`.
 
 ### 2.4 Install ROS package dependencies
 
 ```bash
 source /opt/ros/humble/setup.bash
-rosdep install -y \
-  --from-paths src \
-  --ignore-src \
-  --rosdistro humble
+sudo apt update && sudo apt upgrade
+rosedep update
+rosedep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO
 ```
 
 ---
@@ -186,12 +173,7 @@ rosdep install -y \
 This step takes 1–2 hours on the Jetson AGX Orin.
 
 ```bash
-cd ~/autoware
-colcon build --symlink-install \
-  --cmake-args \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_FLAGS="-w" \
-    -DCUDA_ARCH_BIN="8.7"
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
 > `-DCMAKE_CXX_FLAGS="-w"` suppresses warning spam so real errors are visible.
@@ -206,7 +188,7 @@ Then re-run the `colcon build` command above.
 Once the build finishes, source the workspace:
 
 ```bash
-source ~/autoware/install/setup.bash
+source ~/Autoware-buggy/install/setup.bash
 echo "source ~/autoware/install/setup.bash" >> ~/.bashrc
 source ~/.bashrc
 ```
