@@ -123,7 +123,7 @@ ping 169.254.96.62
 
 ```bash
 git clone https://github.com/ASAS-Labs/Autoware-Buggy.git
-cd autoware
+cd Autoware-Buggy
 ```
 ### 2.2 Install all dependencies via the the setup script 
 Autoware-Buggy provides a setup script that automatically installs everything needed (ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step.
