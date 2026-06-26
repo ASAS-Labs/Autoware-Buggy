@@ -126,7 +126,7 @@ git clone https://github.com/ASAS-Labs/Autoware-Buggy.git
 cd Autoware-Buggy
 ```
 ### 2.2 Install all dependencies via the the setup script 
-Autoware-Buggy provides a setup script that automatically installs everything needed (ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step.
+Autoware-Buggy provides a setup script that automatically installs everything needed (ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step. When prompted BECOME password, just enter your ubuntu desktop password. 
 
 ```bash
 ./setup-dev-env.sh
