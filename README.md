@@ -125,8 +125,12 @@ ping 169.254.96.62
 git clone https://github.com/ASAS-Labs/Autoware-Buggy.git
 cd Autoware-Buggy
 ```
-### 2.2 Install all dependencies via the the setup script 
-Autoware-Buggy provides a setup script that automatically installs everything needed (ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step. When prompted BECOME password, just enter your ubuntu desktop password. 
+
+### 2.2 Install all dependencies via the setup script
+
+Autoware-Buggy provides a setup script that automatically installs everything needed
+(ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step. When
+prompted for a BECOME password, enter your Ubuntu desktop password.
 
 ```bash
 ./setup-dev-env.sh
@@ -136,11 +140,6 @@ Autoware-Buggy provides a setup script that automatically installs everything ne
 > [Autoware releases page](https://github.com/autowarefoundation/autoware/releases).
 
 ### 2.3 Import all package sources
-
-Autoware provides an Ansible playbook that automatically installs everything needed
-(ROS 2 Humble, rosdep, CUDA toolchain, colcon, vcstool, etc.) in one step. This is
-the official recommended approach and is much less error-prone than installing each
-dependency manually.
 
 ```bash
 vcs import src < repositories/autoware.repos
@@ -155,7 +154,6 @@ vcs import src < repositories/autoware.repos
 
 If the playbook fails on any step, consult the official
 [Troubleshooting guide](https://autowarefoundation.github.io/autoware-documentation/main/installation/autoware/source-installation/#troubleshooting).
-
 
 ### 2.4 Install ROS package dependencies
 
@@ -173,7 +171,11 @@ rosdep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO
 This step takes 1–2 hours on the Jetson AGX Orin.
 
 ```bash
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --symlink-install \
+  --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-w" \
+    -DCUDA_ARCH_BIN="8.7"
 ```
 
 > `-DCMAKE_CXX_FLAGS="-w"` suppresses warning spam so real errors are visible.
@@ -195,12 +197,13 @@ source ~/.bashrc
 
 ---
 
-## Step 4 — Clone this repository and apply gokart changes
+## Step 4 — Apply gokart changes
+
+Run the install script from the repo root. This copies the gokart sensor kit and
+vehicle packages into the right locations inside `src/`, patches the NDT params,
+and rebuilds the affected packages.
 
 ```bash
-cd ~
-git clone https://github.com/ASAS-Labs/Autoware-Buggy.git
-cd Autoware-Buggy
 chmod +x install.sh
 ./install.sh
 ```
@@ -209,32 +212,33 @@ chmod +x install.sh
 
 | Action | Detail |
 |---|---|
-| Copies `gokart_sensor_kit` | Custom Ouster OS0 sensor kit — `sensor_kit.xacro` + `sensor_kit_calibration.yaml` |
-| Copies `gokart_vehicle` | Gokart vehicle description — `vehicle_info.param.yaml` (wheelbase, dimensions) |
+| Copies `gokart_sensor_kit_launch` | From `gokart_packages/` into `src/launcher/autoware_launch/sensor_kit/` |
+| Copies `gokart_vehicle_launch` | From `gokart_packages/` into `src/launcher/autoware_launch/vehicle/` |
 | Patches NDT params | Lowers `converged_param_nearest_voxel_transformation_likelihood` from `2.3` → `1.5`, raises `num_threads` to `8` |
-| Copies Python nodes | `ouster_to_xyzirc.py`, `imu_relay.py`, `vehicle_interface_stub.py`, `launch_gokart.sh` |
-| Rebuilds modified packages | `colcon build --packages-select gokart_vehicle gokart_sensor_kit` |
-
-After `install.sh` completes, the gokart packages are visible inside the Autoware
-workspace and the custom nodes are in `~/` and `~/autoware/`.
+| Makes scripts executable | `chmod +x Buggyscripts/launch_gokart.sh` |
+| Rebuilds modified packages | `colcon build --packages-select gokart_vehicle_description gokart_vehicle_launch gokart_sensor_kit_description gokart_sensor_kit_launch` |
 
 ---
 
 ## Step 5 — Prepare the map
 
-The drive link: `https://drive.google.com/drive/folders/14vZKf0e51XjsdPlE20VT9tFJ4AI_fajN?usp=drive_link` contains the prebuilt NYU campus map:
+Download the prebuilt NYU campus map from the Drive link below:
+
+> **Map download:** https://drive.google.com/drive/folders/14vZKf0e51XjsdPlE20VT9tFJ4AI_fajN?usp=drive_link
+
+It contains:
 - `pointcloud_map.pcd` — LIO-SAM pointcloud map
 - `lanelet2_map.osm` — Lanelet2 vector map
 
-Copy it to the expected location:
+Place the files at:
 
 ```bash
-cp -r ~/Autoware-Buggy/map/nyu-map ~/autoware/nyu-map
+mkdir -p ~/Autoware-Buggy/nyu-map
+# Copy pointcloud_map.pcd and lanelet2_map.osm into ~/Autoware-Buggy/nyu-map/
 ```
 
 > To build your own map for a different environment, see
-> [docs/lidar_sensing_pipeline.md](docs/lidar_sensing_pipeline.md) and the mapping
-> section in [CHANGES.md](CHANGES.md).
+> [docs/lidar_sensing_pipeline.md](docs/lidar_sensing_pipeline.md).
 
 ---
 
@@ -246,7 +250,7 @@ being live before continuing.
 ### Terminal 1 — LiDAR driver
 
 ```bash
-source ~/autoware/install/setup.bash
+source ~/Autoware-Buggy/install/setup.bash
 ros2 launch ouster_ros sensor.launch.xml \
   sensor_hostname:=169.254.96.62 \
   lidar_mode:=1024x20 \
@@ -263,7 +267,7 @@ moving on.
 ### Terminal 2 — Converter + IMU relay
 
 ```bash
-~/autoware/launch_gokart.sh
+bash ~/Autoware-Buggy/Buggyscripts/launch_gokart.sh
 ```
 
 Starts `ouster_to_xyzirc.py` (PointXYZIRC converter + QoS bridge) and `imu_relay.py`
@@ -273,8 +277,8 @@ Wait ~3 seconds for both nodes to initialize.
 ### Terminal 3 — Vehicle interface stub
 
 ```bash
-source ~/autoware/install/setup.bash
-python3 ~/autoware/vehicle_interface_stub.py
+source ~/Autoware-Buggy/install/setup.bash
+python3 ~/Autoware-Buggy/Buggyscripts/vehicle_interface_stub.py
 ```
 
 You should see:
@@ -288,11 +292,11 @@ manager will block autonomous mode indefinitely.
 ### Terminal 4 — Autoware
 
 ```bash
-source ~/autoware/install/setup.bash
+source ~/Autoware-Buggy/install/setup.bash
 ros2 launch autoware_launch autoware.launch.xml \
   vehicle_model:=gokart_vehicle \
   sensor_model:=gokart_sensor_kit \
-  map_path:=$HOME/autoware/nyu-map \
+  map_path:=$HOME/Autoware-Buggy/nyu-map \
   launch_sensing_driver:=false \
   launch_sensing:=true \
   launch_localization:=true \
@@ -337,27 +341,22 @@ control commands will update as Autoware plans and follows the route.
 
 ```
 Autoware-Buggy/
+├── gokart_packages/
+│   ├── gokart_sensor_kit_launch/   # Ouster OS0 sensor kit — xacro + calibration yaml
+│   └── gokart_vehicle_launch/      # Gokart vehicle description — vehicle_info.param.yaml
+├── Buggyscripts/
+│   ├── ouster_to_xyzirc.py         # Ouster → PointXYZIRC converter node
+│   ├── imu_relay.py                # IMU topic relay
+│   ├── vehicle_interface_stub.py   # Vehicle interface stub
+│   └── launch_gokart.sh            # Launches converter + IMU relay
 ├── docs/
 │   ├── autoware_intro.md
 │   ├── lidar_sensing_pipeline.md
 │   ├── ndt_ekf.md
 │   └── camera_sensing_pipeline.md
-├── src/
-│   ├── gokart_sensor_kit/       # Ouster OS0 sensor kit — xacro + calibration yaml
-│   └── gokart_vehicle/          # Gokart vehicle description — vehicle_info.param.yaml
-├── config/
-│   └── ndt_scan_matcher.param.yaml
-├── scripts/
-│   ├── ouster_to_xyzirc.py
-│   ├── imu_relay.py
-│   ├── vehicle_interface_stub.py
-│   └── launch_gokart.sh
-├── map/
-│   └── nyu-map/
-│       ├── pointcloud_map.pcd
-│       └── lanelet2_map.osm
-├── CHANGES.md                   # Full change log — every modification explained
-├── install.sh
+├── repositories/
+│   └── autoware.repos              # vcs import source list
+├── install.sh                      # Gokart setup script
 └── README.md
 ```
 
