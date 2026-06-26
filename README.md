@@ -188,8 +188,8 @@ Then re-run the `colcon build` command above.
 Once the build finishes, source the workspace:
 
 ```bash
-source ~/Autoware-buggy/install/setup.bash
-echo "source ~/autoware/install/setup.bash" >> ~/.bashrc
+source ~/Autoware-Buggy/install/setup.bash
+echo "source ~/Autoware-Buggy/install/setup.bash" >> ~/.bashrc
 source ~/.bashrc
 ```
 
