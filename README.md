@@ -162,8 +162,8 @@ If the playbook fails on any step, consult the official
 ```bash
 source /opt/ros/humble/setup.bash
 sudo apt update && sudo apt upgrade
-rosedep update
-rosedep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO
+rosdep update
+rosdep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO
 ```
 
 ---
