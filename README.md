@@ -222,7 +222,7 @@ workspace and the custom nodes are in `~/` and `~/autoware/`.
 
 ## Step 5 — Prepare the map
 
-The `map/nyu-map/` folder in this repo contains the prebuilt NYU campus map:
+The drive link: `https://drive.google.com/drive/folders/14vZKf0e51XjsdPlE20VT9tFJ4AI_fajN?usp=drive_link` contains the prebuilt NYU campus map:
 - `pointcloud_map.pcd` — LIO-SAM pointcloud map
 - `lanelet2_map.osm` — Lanelet2 vector map
 
